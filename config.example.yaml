@@ -1,0 +1,81 @@
+db:
+  host: localhost
+  port: 3306
+  user: kodi
+  password: ""
+  database: MyVideos131
+
+tmdb:
+  api_key: ""
+
+omdb:
+  api_key: ""
+
+rating:
+  prefix: "Rated "
+  target_country: "NL"
+  inference_countries:
+    - BE
+    - DE
+    - AT
+    - FR
+    - GB
+    - DK
+    - SE
+    - US
+  mappings:
+    BE:
+      "AL": "AL"
+      "6": "6"
+      "9": "9"
+      "12": "12"
+      "14": "14"
+      "16": "16"
+      "18": "18"
+    DE:
+      "0": "AL"
+      "6": "6"
+      "12": "12"
+      "16": "16"
+      "18": "18"
+    AT:
+      "0": "AL"
+      "6": "6"
+      "10": "9"
+      "12": "12"
+      "14": "14"
+      "16": "16"
+      "18": "18"
+    FR:
+      "U": "AL"
+      "10": "9"
+      "12": "12"
+      "16": "16"
+      "18": "18"
+    GB:
+      "U": "AL"
+      "PG": "6"
+      "12A": "12"
+      "12": "12"
+      "15": "16"
+      "18": "18"
+    DK:
+      "A": "AL"
+      "7": "6"
+      "11": "12"
+      "15": "16"
+    SE:
+      "Btl": "AL"
+      "7": "6"
+      "11": "12"
+      "15": "16"
+    US:
+      "G": "AL"
+      "PG": "6"
+      "PG-13": "12"
+      "R": "16"
+      "NC-17": "18"
+
+options:
+  dry_run: true
+  rate_limit: 0.25
