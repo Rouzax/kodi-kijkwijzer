@@ -10,15 +10,18 @@ Kodi's TMDB scraper only fetches age ratings for one configured country. When th
 
 ## How it works
 
-The tool connects to Kodi via JSON-RPC and processes movies with empty ratings through a five-tier lookup:
+The tool connects to Kodi via JSON-RPC and processes movies with empty ratings through a six-tier lookup:
 
+0. **Manual overrides** — user-defined ratings in `overrides.yaml`
 1. **TMDB direct** — target country certification (e.g. NL)
 2. **TMDB inferred** — map from culturally similar countries (BE → DE → AT → FR → GB → DK → SE → US)
 3. **OMDB** — US MPAA rating mapped to target scale
 4. **Kijkwijzer.nl** — scrape the Dutch rating authority's website
 5. **Fallback** — configurable default (e.g. `NR`) after a retry window expires
 
-New movies without ratings are tracked and retried for a configurable number of days before the fallback is applied.
+### Retry tracking
+
+New movies that no source can resolve are not immediately given a fallback rating. Instead, they are tracked in `unresolved.json` with the date they were first seen. On each subsequent run, all sources are tried again. Only after `retry_days` (default: 30) have passed without a result is the fallback rating applied. This gives time for new movies to get certifications added to TMDB.
 
 ## Quick start
 
@@ -39,6 +42,13 @@ python3 backfill.py --no-dry-run
 # Verbose output with log file
 python3 backfill.py -v -l backfill.log
 ```
+
+## Requirements
+
+- Python 3.8+
+- Kodi with JSON-RPC enabled (Settings > Services > Control > Allow remote control via HTTP)
+- [TMDB API key](https://www.themoviedb.org/settings/api) (free)
+- [OMDB API key](https://www.omdbapi.com/apikey.aspx) (free tier: 1,000 requests/day)
 
 ## Configuration
 
@@ -67,12 +77,14 @@ omdb:
 
 ```yaml
 rating:
-  prefix: "Rated "           # prepended to rating value (match your scraper)
+  prefix: "Rated "           # prepended to rating value (match your scraper config)
   target_country: "NL"       # ISO 3166-1 country code
-  fallback_rating: "NR"      # applied after retry window expires
+  fallback_rating: "NR"      # applied after retry window expires (empty string to skip)
   inference_countries: [...]  # priority order for cross-country inference
   mappings: {...}             # country-specific rating → target scale mapping
 ```
+
+The `prefix` should match what your Kodi TMDB scraper uses. Check an existing rated movie in your library to see the format (e.g. `"Rated 12"` means prefix is `"Rated "`).
 
 ### Inference
 
@@ -92,6 +104,8 @@ When the target country's rating is missing on TMDB, the tool checks other count
 US is last because its rating philosophy differs from European norms — conservative on nudity/sex but lenient on violence.
 
 All mappings are configurable in `config.yaml`. The default mappings use conservative rounding (always maps to the stricter bracket).
+
+**Note:** YAML mapping keys must be quoted strings (e.g. `"6": "6"`, not `6: "6"`). Unquoted numbers are parsed as integers and will silently fail to match. The tool normalizes keys automatically, but quoting them in config avoids confusion.
 
 ### Options
 
@@ -116,7 +130,9 @@ overrides:
   "Woezel En Pip - Alles Is Fijn Familiemusical": "AL"
 ```
 
-Titles must match exactly as they appear in Kodi.
+Titles must match exactly as they appear in Kodi. Overrides are checked first (Tier 0) and take priority over all other sources.
+
+See `overrides.example.yaml` for a template.
 
 ## CLI options
 
@@ -138,13 +154,38 @@ python3 backfill.py [-c CONFIG] [--dry-run | --no-dry-run] [-v] [-l LOGFILE]
 08:14:09 INFO  [DRY-RUN] Fast Charlie                        -> Rated 16 (source: tmdb-inferred-DE)
 08:14:14 INFO  [PENDING] Ernst, Bobbie: Herrie op de Noordpool -> waiting for rating (since 2026-03-21)
 08:14:35 INFO  [DRY-RUN] Reality                             -> Rated AL (source: tmdb-NL)
+08:14:38 INFO  Kijkwijzer: matched 'Sprookjesboom de Musical' -> https://www.kijkwijzer.nl/films/sprookjesboom/
 08:14:38 INFO  [DRY-RUN] Sprookjesboom de Musical            -> Rated AL (source: kijkwijzer)
+08:14:57 INFO  Tracking 9 unresolved movies in unresolved.json
 08:14:57 INFO  --- Summary ---
+08:14:57 INFO  Overrides:     0
 08:14:57 INFO  TMDB direct:   5
 08:14:57 INFO  TMDB inferred: 24
+08:14:57 INFO  OMDB:          0
 08:14:57 INFO  Kijkwijzer:    6
+08:14:57 INFO  Fallback:      0
 08:14:57 INFO  Pending:       9
+08:14:57 INFO  Errors:        0
 ```
+
+### Log labels
+
+| Label | Meaning |
+|-------|---------|
+| `[DRY-RUN]` | Would set this rating (dry run mode) |
+| `[UPDATE]` | Rating was written to Kodi |
+| `[PENDING]` | No rating found yet, still in retry window |
+
+### Source labels
+
+| Source | Meaning |
+|--------|---------|
+| `tmdb-NL` | Direct match from TMDB for target country |
+| `tmdb-inferred-DE` | Mapped from German FSK rating |
+| `omdb` | Mapped from US MPAA rating via OMDB |
+| `kijkwijzer` | Scraped from kijkwijzer.nl |
+| `override` | Manual override from overrides.yaml |
+| `fallback` | Retry window expired, applied fallback rating |
 
 ## Running on a schedule
 
@@ -154,6 +195,17 @@ Add to cron to run daily:
 # Run daily at 3am, log to file
 0 3 * * * cd /path/to/kodi-rating-backfill && python3 backfill.py --no-dry-run -l backfill.log
 ```
+
+## Files
+
+| File | Tracked | Purpose |
+|------|---------|---------|
+| `backfill.py` | Yes | Main script |
+| `config.example.yaml` | Yes | Config template |
+| `overrides.example.yaml` | Yes | Overrides template |
+| `config.yaml` | No | Your config (contains API keys) |
+| `overrides.yaml` | No | Your manual overrides |
+| `unresolved.json` | No | Retry tracker (auto-managed) |
 
 ## License
 
