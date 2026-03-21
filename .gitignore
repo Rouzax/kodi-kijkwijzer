@@ -1,6 +1,7 @@
 config.yaml
 overrides.yaml
-unresolved.json
+unresolved_movies.json
+unresolved_tvshows.json
 __pycache__/
 *.pyc
 .env
