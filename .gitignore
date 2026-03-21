@@ -1,4 +1,5 @@
 config.yaml
+overrides.yaml
 unresolved.json
 __pycache__/
 *.pyc

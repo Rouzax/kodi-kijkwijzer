@@ -4,8 +4,8 @@
 import argparse
 import json
 import logging
-import os
 import re
+import sys
 import time
 from datetime import date
 
@@ -111,8 +111,31 @@ def update_movie_rating(url, movie_id, rating_value, dry_run=True, auth=None):
         "params": {"movieid": movie_id, "mpaa": rating_value},
         "id": 1,
     }
-    resp = requests.post(url, json=payload, auth=auth, timeout=10)
-    return resp.json().get("result") == "OK"
+    try:
+        resp = requests.post(url, json=payload, auth=auth, timeout=10)
+        resp.raise_for_status()
+        result = resp.json().get("result")
+        if result != "OK":
+            log.warning("Failed to set rating for movieid %s: %s", movie_id, result)
+            return False
+        return True
+    except requests.RequestException as e:
+        log.warning("Failed to set rating for movieid %s: %s", movie_id, e)
+        return False
+
+
+_kijkwijzer_session = None
+
+
+def _get_kijkwijzer_session():
+    """Get a reusable requests session with a descriptive User-Agent."""
+    global _kijkwijzer_session
+    if _kijkwijzer_session is None:
+        _kijkwijzer_session = requests.Session()
+        _kijkwijzer_session.headers["User-Agent"] = (
+            "Kodi-Rating-Backfill/1.0 (https://github.com/kodi-rating-backfill)"
+        )
+    return _kijkwijzer_session
 
 
 def lookup_kijkwijzer(title, rate_limit=0.25):
@@ -121,9 +144,10 @@ def lookup_kijkwijzer(title, rate_limit=0.25):
     Returns (rating, source) or (None, None).
     Rating values: 'AL', '6', '9', '12', '14', '16', '18'.
     """
+    session = _get_kijkwijzer_session()
     search_url = "https://www.kijkwijzer.nl/zoeken/"
     try:
-        resp = requests.get(
+        resp = session.get(
             search_url,
             params={"query": title, "producties": "0"},
             timeout=10,
@@ -161,8 +185,12 @@ def lookup_kijkwijzer(title, rate_limit=0.25):
         if slug == title_slug or slug_base == title_slug:
             best_link = link
             break
-        # Also check if the slug starts with the title slug (handles subtitles)
-        if slug.startswith(title_slug) or title_slug.startswith(slug_base):
+        # Partial match: require at least 60% overlap to avoid false positives
+        # (e.g. "ice" matching "ice-age")
+        if slug.startswith(title_slug):
+            best_link = link
+            break
+        if title_slug.startswith(slug_base) and len(slug_base) >= len(title_slug) * 0.6:
             best_link = link
             break
 
@@ -170,11 +198,12 @@ def lookup_kijkwijzer(title, rate_limit=0.25):
         log.debug("Kijkwijzer: no title match for '%s' (slug: %s)", title, title_slug)
         return None, None
 
+    log.info("Kijkwijzer: matched '%s' -> %s", title, best_link)
     time.sleep(rate_limit)
 
     # Fetch detail page
     try:
-        detail_resp = requests.get(best_link, timeout=10)
+        detail_resp = session.get(best_link, timeout=10)
         if detail_resp.status_code != 200:
             return None, None
     except requests.RequestException:
@@ -183,16 +212,20 @@ def lookup_kijkwijzer(title, rate_limit=0.25):
     detail_text = detail_resp.text
 
     # Parse rating from detail page
-    # Pattern 1: "Alle leeftijden" -> AL
-    if re.search(r"Alle leeftijden", detail_text):
-        return "AL", "kijkwijzer"
-
-    # Pattern 2: "schadelijk tot X jaar" -> X
+    # Check specific pattern first (more reliable than "Alle leeftijden")
     age_match = re.search(r"schadelijk tot (\d+) jaar", detail_text)
     if age_match:
         age = age_match.group(1)
         if age in ("6", "9", "12", "14", "16", "18"):
             return age, "kijkwijzer"
+
+    # "Alle leeftijden" — only match in heading context to avoid nav/footer matches
+    if re.search(r"<h[12][^>]*>.*?Alle leeftijden", detail_text, re.DOTALL):
+        return "AL", "kijkwijzer"
+    # Fallback: match if it appears in the main content area (not just anywhere)
+    if detail_text.count("Alle leeftijden") >= 2:
+        # Multiple occurrences suggest it's the actual rating, not just a nav item
+        return "AL", "kijkwijzer"
 
     log.debug("Kijkwijzer: could not parse rating from %s", best_link)
     return None, None
@@ -287,7 +320,9 @@ def backfill(config):
     prefix = rating_cfg.get("prefix", "")
     target = rating_cfg["target_country"]
     inference = rating_cfg.get("inference_countries", [])
-    mappings = rating_cfg.get("mappings", {})
+    # Normalize mapping keys to strings (YAML parses unquoted numbers as integers)
+    raw_mappings = rating_cfg.get("mappings", {})
+    mappings = {c: {str(k): v for k, v in m.items()} for c, m in raw_mappings.items()}
     fallback_rating = rating_cfg.get("fallback_rating", "NR")
     dry_run = opts.get("dry_run", True)
     rate_limit = opts.get("rate_limit", 0.25)
@@ -339,10 +374,9 @@ def backfill(config):
                 rating, source = lookup_omdb(imdb_id, omdb_key, mappings)
                 time.sleep(rate_limit)
 
-            # Tier 4: Kijkwijzer.nl scraping
+            # Tier 4: Kijkwijzer.nl scraping (handles its own rate limiting)
             if not rating and use_kijkwijzer:
                 rating, source = lookup_kijkwijzer(title, rate_limit)
-                time.sleep(rate_limit)
 
         except requests.RequestException as e:
             log.error("API error for '%s': %s", title, e)
@@ -397,6 +431,20 @@ def backfill(config):
     return stats
 
 
+def validate_config(config):
+    """Check required config keys exist. Returns list of errors."""
+    errors = []
+    if not config.get("kodi", {}).get("url"):
+        errors.append("kodi.url is required")
+    if not config.get("tmdb", {}).get("api_key"):
+        errors.append("tmdb.api_key is required")
+    if not config.get("omdb", {}).get("api_key"):
+        errors.append("omdb.api_key is required")
+    if not config.get("rating", {}).get("target_country"):
+        errors.append("rating.target_country is required")
+    return errors
+
+
 def setup_logging(verbose=False, log_file=None):
     """Configure console and optional file logging."""
     fmt = "%(asctime)s %(levelname)-5s %(message)s"
@@ -435,6 +483,13 @@ def main():
     config = load_config(args.config)
     log_file = args.log_file or config.get("options", {}).get("log_file")
     setup_logging(verbose=args.verbose, log_file=log_file)
+
+    errors = validate_config(config)
+    if errors:
+        for err in errors:
+            log.error("Config error: %s", err)
+        log.error("See config.example.yaml for reference")
+        sys.exit(1)
 
     if args.dry_run:
         config.setdefault("options", {})["dry_run"] = True
