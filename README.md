@@ -22,7 +22,7 @@ Kodi's TMDB scraper only fetches age ratings for one configured country. When th
 
 The tool connects to Kodi via JSON-RPC and processes movies and TV shows with empty ratings through a six-tier lookup:
 
-0. **Manual overrides** — user-defined ratings in `overrides.yaml`
+0. **Manual overrides** — user-defined ratings in `overrides_movies.yaml` / `overrides_tvshows.yaml`
 1. **TMDB direct** — target country certification (e.g. NL)
 2. **TMDB inferred** — map from culturally similar countries (BE → DE → AT → FR → GB → DK → SE → US)
 3. **OMDB** — US MPAA rating mapped to target scale
