@@ -1,9 +1,11 @@
 # Manual rating overrides
-# Use this file to set ratings for movies that no API can resolve.
-# The title must match exactly as it appears in your Kodi database.
+# Use this file to set ratings for movies or TV shows that no API can resolve.
+# The title must match exactly as it appears in your Kodi library.
 #
 # Copy this file to overrides.yaml and add your overrides.
 
 overrides:
-  # "Movie Title": "rating_value"
+  # Movies
   # "Sprookjesboom de Musical": "AL"
+  # TV Shows
+  # "The Pirate Bay": "16"

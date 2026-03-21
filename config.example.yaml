@@ -83,6 +83,7 @@ options:
   rate_limit: 0.25
   retry_days: 30             # days to retry before applying fallback rating
   kijkwijzer: true           # scrape kijkwijzer.nl as fallback
-  overrides_file: "overrides.yaml"    # manual rating overrides
-  unresolved_file: "unresolved.json"  # legacy; tracker files now per media type
+  overrides_file: "overrides.yaml"    # manual overrides (movies + TV shows)
   # log_file: "backfill.log"        # optional: also write log to file
+  # Tracker files are auto-managed per media type:
+  #   unresolved_movies.json, unresolved_tvshows.json
