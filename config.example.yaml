@@ -85,10 +85,10 @@ options:
   kijkwijzer: true           # use kijkwijzer.nl as additional source (Tier 4)
   # log_file: "backfill.log"       # also write all output to this file
 
-  # Per-type override files (create as needed):
-  #   overrides_movies.yaml    — manual movie rating overrides
-  #   overrides_tvshows.yaml   — manual TV show rating overrides
+  # The following files are NOT config keys — do not uncomment them.
+  # They are created automatically or by you in the project directory:
   #
-  # Per-type tracker files (auto-managed, do not edit):
-  #   unresolved_movies.json   — tracks movies waiting for a rating
-  #   unresolved_tvshows.json  — tracks TV shows waiting for a rating
+  #   overrides_movies.yaml    — create this to manually set movie ratings
+  #   overrides_tvshows.yaml   — create this to manually set TV show ratings
+  #   unresolved_movies.json   — auto-managed retry tracker for movies
+  #   unresolved_tvshows.json  — auto-managed retry tracker for TV shows
