@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kodi-kijkwijzer"
-version = "2.0.0"
+version = "2.1.0"
 description = "Backfill missing age ratings in Kodi using TMDB, OMDB, and kijkwijzer.nl"
 readme = "README.md"
 license = {text = "MIT"}

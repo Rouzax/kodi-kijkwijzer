@@ -157,7 +157,7 @@ overrides:
 
 Titles must match exactly as they appear in Kodi. Overrides are checked first (Tier 0) and take priority over all other sources.
 
-See `overrides.example.yaml` for a template.
+See `overrides_movies.example.yaml` and `overrides_tvshows.example.yaml` for templates.
 
 ## CLI options
 
@@ -261,7 +261,8 @@ Add to cron to run daily:
 | `kodi_kijkwijzer/` | Yes | Main package |
 | `backfill.py` | Yes | Backwards-compatible wrapper |
 | `config.example.yaml` | Yes | Config template |
-| `overrides.example.yaml` | Yes | Overrides template |
+| `overrides_movies.example.yaml` | Yes | Movie overrides template |
+| `overrides_tvshows.example.yaml` | Yes | TV show overrides template |
 | `config.yaml` | No | Your config (contains API keys) |
 | `overrides_movies.yaml` | No | Movie rating overrides |
 | `overrides_tvshows.yaml` | No | TV show rating overrides |

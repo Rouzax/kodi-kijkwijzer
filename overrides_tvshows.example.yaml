@@ -1,0 +1,7 @@
+# Manual rating overrides for TV shows
+# The title must match exactly as it appears in your Kodi library.
+#
+# Copy this file to overrides_tvshows.yaml and add your overrides.
+
+overrides:
+  # "The Pirate Bay": "16"
