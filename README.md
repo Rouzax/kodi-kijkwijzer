@@ -4,6 +4,16 @@
 
 # Kodi Rating Backfill
 
+<p align="center">
+  <img src="assets/al.svg" alt="AL" width="40">
+  <img src="assets/6.svg" alt="6" width="40">
+  <img src="assets/9.svg" alt="9" width="40">
+  <img src="assets/12.svg" alt="12" width="40">
+  <img src="assets/14.svg" alt="14" width="40">
+  <img src="assets/16.svg" alt="16" width="40">
+  <img src="assets/18.svg" alt="18" width="40">
+</p>
+
 Backfill missing age ratings in your Kodi library using TMDB, OMDB, and kijkwijzer.nl.
 
 Kodi's TMDB scraper only fetches age ratings for one configured country. When that country's certification is missing on TMDB, the movie gets no rating at all. This tool fills those gaps by checking multiple sources and inferring ratings from other countries.
