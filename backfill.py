@@ -16,8 +16,20 @@ log = logging.getLogger(__name__)
 
 
 def load_config(path):
-    with open(path) as f:
-        return yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Error: Config file not found: {path}")
+        print("Copy config.example.yaml to config.yaml and edit it.")
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print(f"Error: Invalid YAML in {path}: {e}")
+        sys.exit(1)
+    if not isinstance(config, dict):
+        print(f"Error: Config file {path} is empty or invalid")
+        sys.exit(1)
+    return config
 
 
 def load_overrides(path):
@@ -43,8 +55,11 @@ def save_unresolved(path, data, dry_run=True):
     """Save unresolved tracker to JSON file."""
     if dry_run:
         return
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+    except OSError as e:
+        log.warning("Could not save unresolved tracker to %s: %s", path, e)
 
 
 def should_apply_fallback(title, unresolved, retry_days):
@@ -60,7 +75,13 @@ def should_apply_fallback(title, unresolved, retry_days):
         log.debug("Tracking new unresolved: '%s'", title)
         return False
 
-    first_seen = date.fromisoformat(unresolved[title]["first_seen"])
+    try:
+        first_seen = date.fromisoformat(unresolved[title]["first_seen"])
+    except (KeyError, ValueError):
+        # Corrupt entry — reset tracking
+        unresolved[title] = {"first_seen": today}
+        log.warning("Reset corrupt unresolved entry for '%s'", title)
+        return False
     days_elapsed = (date.today() - first_seen).days
 
     if days_elapsed >= retry_days:
@@ -86,9 +107,35 @@ def get_movies_missing_rating(url, auth=None):
         },
         "id": 1,
     }
-    resp = requests.post(url, json=payload, auth=auth, timeout=30)
-    resp.raise_for_status()
-    all_movies = resp.json().get("result", {}).get("movies", [])
+    try:
+        resp = requests.post(url, json=payload, auth=auth, timeout=30)
+        resp.raise_for_status()
+    except requests.ConnectionError:
+        log.error("Cannot connect to Kodi at %s — is the web server enabled?", url)
+        sys.exit(1)
+    except requests.Timeout:
+        log.error("Connection to Kodi at %s timed out", url)
+        sys.exit(1)
+    except requests.HTTPError as e:
+        log.error("Kodi returned HTTP error: %s", e)
+        sys.exit(1)
+
+    try:
+        data = resp.json()
+    except ValueError:
+        log.error("Kodi returned invalid JSON — is %s the correct JSON-RPC endpoint?", url)
+        sys.exit(1)
+
+    if "error" in data:
+        err = data["error"]
+        msg = err.get("message", err) if isinstance(err, dict) else err
+        log.error("Kodi JSON-RPC error: %s", msg)
+        sys.exit(1)
+
+    all_movies = data.get("result", {}).get("movies", [])
+    if not all_movies:
+        log.warning("No movies found in Kodi library at %s", url)
+
     return [
         {
             "idMovie": m["movieid"],
@@ -238,12 +285,23 @@ def lookup_tmdb(tmdb_id, api_key, target_country, inference_countries, mappings)
     with mapping to target scale.
     """
     url = f"https://api.themoviedb.org/3/movie/{tmdb_id}/release_dates"
-    resp = requests.get(url, params={"api_key": api_key}, timeout=10)
+    try:
+        resp = requests.get(url, params={"api_key": api_key}, timeout=10)
+    except requests.RequestException as e:
+        log.warning("TMDB request failed for %s: %s", tmdb_id, e)
+        return None, None
+    if resp.status_code == 401:
+        log.error("TMDB API key is invalid (401 Unauthorized)")
+        sys.exit(1)
     if resp.status_code != 200:
         log.warning("TMDB %s returned %s", tmdb_id, resp.status_code)
         return None, None
 
-    results = resp.json().get("results", [])
+    try:
+        results = resp.json().get("results", [])
+    except ValueError:
+        log.warning("TMDB returned invalid JSON for %s", tmdb_id)
+        return None, None
     # Build country -> certification dict (take first non-empty cert)
     certs = {}
     for entry in results:
@@ -277,16 +335,27 @@ def lookup_omdb(imdb_id, api_key, mappings):
 
     Maps the US MPAA 'Rated' field to target scale via US mapping.
     """
-    resp = requests.get(
-        "https://www.omdbapi.com/",
-        params={"i": imdb_id, "apikey": api_key},
-        timeout=10,
-    )
+    try:
+        resp = requests.get(
+            "https://www.omdbapi.com/",
+            params={"i": imdb_id, "apikey": api_key},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        log.warning("OMDB request failed for %s: %s", imdb_id, e)
+        return None, None
+    if resp.status_code == 401:
+        log.error("OMDB API key is invalid (401 Unauthorized)")
+        sys.exit(1)
     if resp.status_code != 200:
         log.warning("OMDB %s returned %s", imdb_id, resp.status_code)
         return None, None
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError:
+        log.warning("OMDB returned invalid JSON for %s", imdb_id)
+        return None, None
     if data.get("Response") == "False":
         log.debug("OMDB: no result for %s", imdb_id)
         return None, None
@@ -451,9 +520,14 @@ def setup_logging(verbose=False, log_file=None):
     datefmt = "%H:%M:%S"
     level = logging.DEBUG if verbose else logging.INFO
 
-    handlers = [logging.StreamHandler()]
+    # Use UTF-8 for console and file to handle non-ASCII titles (e.g. Cyrillic)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    console = logging.StreamHandler(sys.stdout)
+
+    handlers = [console]
     if log_file:
-        handlers.append(logging.FileHandler(log_file))
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
 
     logging.basicConfig(level=level, format=fmt, datefmt=datefmt, handlers=handlers)
 
