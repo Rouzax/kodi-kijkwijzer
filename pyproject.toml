@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kodi-kijkwijzer"
+version = "2.0.0"
+description = "Backfill missing age ratings in Kodi using TMDB, OMDB, and kijkwijzer.nl"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.28",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+kodi-kijkwijzer = "kodi_kijkwijzer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Rouzax/kodi-kijkwijzer"
+Issues = "https://github.com/Rouzax/kodi-kijkwijzer/issues"

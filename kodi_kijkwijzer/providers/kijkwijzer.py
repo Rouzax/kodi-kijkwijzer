@@ -17,7 +17,7 @@ def _get_kijkwijzer_session():
     if _kijkwijzer_session is None:
         _kijkwijzer_session = requests.Session()
         _kijkwijzer_session.headers["User-Agent"] = (
-            "Kodi-Rating-Backfill/1.0 (https://github.com/kodi-rating-backfill)"
+            "Kodi-Kijkwijzer/2.0 (https://github.com/Rouzax/kodi-kijkwijzer)"
         )
     return _kijkwijzer_session
 
