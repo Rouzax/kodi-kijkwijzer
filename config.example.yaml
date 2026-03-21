@@ -83,9 +83,12 @@ options:
   rate_limit: 0.25           # seconds to wait between API calls (respects rate limits)
   retry_days: 30             # days to keep retrying before applying fallback_rating
   kijkwijzer: true           # use kijkwijzer.nl as additional source (Tier 4)
-  overrides_file: "overrides.yaml"  # single file for both movie + TV show overrides
   # log_file: "backfill.log"       # also write all output to this file
 
-  # Retry tracker files (auto-managed, do not edit):
+  # Per-type override files (create as needed):
+  #   overrides_movies.yaml    — manual movie rating overrides
+  #   overrides_tvshows.yaml   — manual TV show rating overrides
+  #
+  # Per-type tracker files (auto-managed, do not edit):
   #   unresolved_movies.json   — tracks movies waiting for a rating
   #   unresolved_tvshows.json  — tracks TV shows waiting for a rating

@@ -6,7 +6,7 @@ import time
 
 import requests
 
-from kodi_kijkwijzer.config import load_overrides
+from kodi_kijkwijzer.config import load_overrides_for_type
 from kodi_kijkwijzer.kodi import get_missing_ratings, update_rating
 from kodi_kijkwijzer.media_types import MOVIE, TVSHOW
 from kodi_kijkwijzer.providers import kijkwijzer, omdb, tmdb
@@ -40,24 +40,20 @@ def backfill(config, movies_only=False, tvshows_only=False):
     use_kijkwijzer = opts.get("kijkwijzer", True)
     retry_days = opts.get("retry_days", 30)
 
-    # Load manual overrides
-    overrides_path = opts.get("overrides_file", "overrides.yaml")
-    overrides = load_overrides(overrides_path)
-    if overrides:
-        log.info("Loaded %d manual overrides from %s", len(overrides), overrides_path)
-
-    # Determine unresolved directory from config
-    unresolved_file = opts.get("unresolved_file", "unresolved.json")
-    unresolved_dir = os.path.dirname(unresolved_file) or "."
-
-    # Migrate legacy unresolved.json to per-type files
-    legacy_path = os.path.join(unresolved_dir, "unresolved.json")
-    movies_tracker = os.path.join(unresolved_dir, "unresolved_movies.json")
-    if os.path.exists(legacy_path) and not os.path.exists(movies_tracker):
-        log.info("Migrating legacy %s -> %s", legacy_path, movies_tracker)
-        legacy_data = load_unresolved(legacy_path)
+    # Migrate legacy files if present
+    legacy_unresolved = "unresolved.json"
+    movies_tracker = "unresolved_movies.json"
+    if os.path.exists(legacy_unresolved) and not os.path.exists(movies_tracker):
+        log.info("Migrating legacy %s -> %s", legacy_unresolved, movies_tracker)
+        legacy_data = load_unresolved(legacy_unresolved)
         if legacy_data and not dry_run:
             save_unresolved(movies_tracker, legacy_data, dry_run=False)
+
+    legacy_overrides = "overrides.yaml"
+    movies_overrides = "overrides_movies.yaml"
+    if os.path.exists(legacy_overrides) and not os.path.exists(movies_overrides):
+        log.info("Note: legacy %s found — rename to %s (movies) and/or overrides_tvshows.yaml",
+                 legacy_overrides, movies_overrides)
 
     media_types = []
     if not tvshows_only:
@@ -67,11 +63,16 @@ def backfill(config, movies_only=False, tvshows_only=False):
 
     all_stats = {}
     for media_type in media_types:
+        # Load per-type overrides
+        overrides, overrides_path = load_overrides_for_type(opts, media_type.name)
+        if overrides:
+            log.info("Loaded %d manual overrides from %s", len(overrides), overrides_path)
+
         stats = process_media_type(
             media_type, kodi_url, auth, tmdb_key, omdb_key,
             target, inference, mappings, prefix, fallback_rating,
             dry_run, rate_limit, use_kijkwijzer, retry_days,
-            overrides, unresolved_dir,
+            overrides,
         )
         all_stats[media_type.name] = stats
 
@@ -81,10 +82,10 @@ def backfill(config, movies_only=False, tvshows_only=False):
 def process_media_type(media_type, kodi_url, auth, tmdb_key, omdb_key,
                        target, inference, mappings, prefix, fallback_rating,
                        dry_run, rate_limit, use_kijkwijzer, retry_days,
-                       overrides, unresolved_dir):
+                       overrides):
     """Process a single media type. This is the main loop."""
     # Load tracker for this media type
-    tracker_path = os.path.join(unresolved_dir, f"unresolved_{media_type.name}s.json")
+    tracker_path = f"unresolved_{media_type.name}s.json"
     unresolved = load_unresolved(tracker_path)
 
     items = get_missing_ratings(kodi_url, media_type, auth)

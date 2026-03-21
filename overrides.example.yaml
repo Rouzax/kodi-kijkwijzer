@@ -1,11 +1,10 @@
-# Manual rating overrides
-# Use this file to set ratings for movies or TV shows that no API can resolve.
+# Manual rating overrides for movies
+# Use this file to set ratings for movies that no API can resolve.
 # The title must match exactly as it appears in your Kodi library.
 #
-# Copy this file to overrides.yaml and add your overrides.
+# Copy this file to overrides_movies.yaml and add your overrides.
+# For TV shows, create overrides_tvshows.yaml with the same format.
 
 overrides:
-  # Movies
   # "Sprookjesboom de Musical": "AL"
-  # TV Shows
-  # "The Pirate Bay": "16"
+  # "Woezel En Pip - Alles Is Fijn Familiemusical": "AL"

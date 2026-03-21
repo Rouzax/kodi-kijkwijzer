@@ -47,3 +47,14 @@ def load_overrides(path):
             return data.get("overrides", {})
     except FileNotFoundError:
         return {}
+
+
+def load_overrides_for_type(opts, media_type_name):
+    """Load overrides for a specific media type.
+
+    Looks for overrides_movies.yaml / overrides_tvshows.yaml.
+    """
+    default = f"overrides_{media_type_name}s.yaml"
+    key = f"overrides_{media_type_name}s_file"
+    path = opts.get(key, default)
+    return load_overrides(path), path

@@ -1,5 +1,8 @@
 config.yaml
 overrides.yaml
+overrides_movies.yaml
+overrides_tvshows.yaml
+unresolved.json
 unresolved_movies.json
 unresolved_tvshows.json
 __pycache__/

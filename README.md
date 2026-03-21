@@ -135,21 +135,27 @@ options:
   rate_limit: 0.25           # seconds between API calls
   retry_days: 30             # days to retry before applying fallback
   kijkwijzer: true           # enable kijkwijzer.nl scraping
-  overrides_file: "overrides.yaml"
   # log_file: "backfill.log"
 ```
 
 ### Manual overrides
 
-For items that no source can resolve, create `overrides.yaml`:
+Override files are separate per media type. Create them as needed:
 
+**`overrides_movies.yaml`** — movie overrides:
 ```yaml
 overrides:
   "Sprookjesboom de Musical - Een gi-ga-gantisch avontuur!": "AL"
   "Woezel En Pip - Alles Is Fijn Familiemusical": "AL"
 ```
 
-Titles must match exactly as they appear in Kodi. Overrides are checked first (Tier 0) and take priority over all other sources. Works for both movies and TV shows.
+**`overrides_tvshows.yaml`** — TV show overrides:
+```yaml
+overrides:
+  "The Pirate Bay": "16"
+```
+
+Titles must match exactly as they appear in Kodi. Overrides are checked first (Tier 0) and take priority over all other sources.
 
 See `overrides.example.yaml` for a template.
 
@@ -246,7 +252,7 @@ Add to cron to run daily:
 
 - `python backfill.py` still works (backwards-compatible wrapper)
 - `unresolved.json` is automatically migrated to `unresolved_movies.json` on first run
-- No config changes required
+- Legacy `overrides.yaml` should be renamed to `overrides_movies.yaml`
 
 ## Files
 
@@ -257,7 +263,8 @@ Add to cron to run daily:
 | `config.example.yaml` | Yes | Config template |
 | `overrides.example.yaml` | Yes | Overrides template |
 | `config.yaml` | No | Your config (contains API keys) |
-| `overrides.yaml` | No | Your manual overrides |
+| `overrides_movies.yaml` | No | Movie rating overrides |
+| `overrides_tvshows.yaml` | No | TV show rating overrides |
 | `unresolved_movies.json` | No | Movie retry tracker (auto-managed) |
 | `unresolved_tvshows.json` | No | TV show retry tracker (auto-managed) |
 
