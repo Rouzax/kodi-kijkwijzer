@@ -2,19 +2,16 @@
 """Backfill missing age ratings in Kodi's video database."""
 
 import argparse
+import json
 import logging
-import sys
+import os
+import re
 import time
+from datetime import date
 
-import mysql.connector
 import requests
 import yaml
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-5s %(message)s",
-    datefmt="%H:%M:%S",
-)
 log = logging.getLogger(__name__)
 
 
@@ -23,21 +20,182 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def get_movies_missing_rating(conn):
-    """Return list of dicts with idMovie, title, tmdb_id, imdb_id."""
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT m.idMovie, m.c00 AS title, m.c12 AS mpaa,
-               u_tmdb.value AS tmdb_id, u_imdb.value AS imdb_id
-        FROM movie m
-        LEFT JOIN uniqueid u_tmdb ON u_tmdb.media_id = m.idMovie
-            AND u_tmdb.media_type = 'movie' AND u_tmdb.type = 'tmdb'
-        LEFT JOIN uniqueid u_imdb ON u_imdb.media_id = m.idMovie
-            AND u_imdb.media_type = 'movie' AND u_imdb.type = 'imdb'
-        WHERE m.c12 = '' OR m.c12 IS NULL
-        ORDER BY m.c00
-    """)
-    return cursor.fetchall()
+def load_overrides(path):
+    """Load manual rating overrides from YAML file. Returns dict of title -> rating."""
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+            return data.get("overrides", {})
+    except FileNotFoundError:
+        return {}
+
+
+def load_unresolved(path):
+    """Load unresolved tracker. Returns dict of title -> {"first_seen": "YYYY-MM-DD"}."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_unresolved(path, data, dry_run=True):
+    """Save unresolved tracker to JSON file."""
+    if dry_run:
+        return
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+
+
+def should_apply_fallback(title, unresolved, retry_days):
+    """Check if a movie has been unresolved long enough to apply fallback.
+
+    Returns True if fallback should be applied, False if still in retry window.
+    Also adds the movie to the tracker if not yet tracked.
+    """
+    today = date.today().isoformat()
+
+    if title not in unresolved:
+        unresolved[title] = {"first_seen": today}
+        log.debug("Tracking new unresolved: '%s'", title)
+        return False
+
+    first_seen = date.fromisoformat(unresolved[title]["first_seen"])
+    days_elapsed = (date.today() - first_seen).days
+
+    if days_elapsed >= retry_days:
+        log.debug("Retry window expired for '%s' (%d days)", title, days_elapsed)
+        return True
+
+    log.debug("Still in retry window for '%s' (%d/%d days)", title, days_elapsed, retry_days)
+    return False
+
+
+def get_movies_missing_rating(url, auth=None):
+    """Query Kodi JSON-RPC for all movies, return those with empty mpaa.
+
+    Kodi's server-side filter for empty mpaa doesn't work reliably,
+    so we fetch all movies and filter client-side.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "VideoLibrary.GetMovies",
+        "params": {
+            "properties": ["mpaa", "uniqueid", "title"],
+            "sort": {"method": "title"},
+        },
+        "id": 1,
+    }
+    resp = requests.post(url, json=payload, auth=auth, timeout=30)
+    resp.raise_for_status()
+    all_movies = resp.json().get("result", {}).get("movies", [])
+    return [
+        {
+            "idMovie": m["movieid"],
+            "title": m["title"],
+            "tmdb_id": m.get("uniqueid", {}).get("tmdb"),
+            "imdb_id": m.get("uniqueid", {}).get("imdb"),
+        }
+        for m in all_movies
+        if not m.get("mpaa")
+    ]
+
+
+def update_movie_rating(url, movie_id, rating_value, dry_run=True, auth=None):
+    """Set mpaa via Kodi JSON-RPC SetMovieDetails."""
+    if dry_run:
+        return True
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "VideoLibrary.SetMovieDetails",
+        "params": {"movieid": movie_id, "mpaa": rating_value},
+        "id": 1,
+    }
+    resp = requests.post(url, json=payload, auth=auth, timeout=10)
+    return resp.json().get("result") == "OK"
+
+
+def lookup_kijkwijzer(title, rate_limit=0.25):
+    """Search kijkwijzer.nl by title, scrape the detail page for age rating.
+
+    Returns (rating, source) or (None, None).
+    Rating values: 'AL', '6', '9', '12', '14', '16', '18'.
+    """
+    search_url = "https://www.kijkwijzer.nl/zoeken/"
+    try:
+        resp = requests.get(
+            search_url,
+            params={"query": title, "producties": "0"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            log.warning("Kijkwijzer search returned %s", resp.status_code)
+            return None, None
+    except requests.RequestException as e:
+        log.warning("Kijkwijzer search failed: %s", e)
+        return None, None
+
+    # Extract film/series links from search results
+    links = re.findall(
+        r'href="(https://www\.kijkwijzer\.nl/(?:films|series|overige)/[^"]+/)"',
+        resp.text,
+    )
+    if not links:
+        log.debug("Kijkwijzer: no results for '%s'", title)
+        return None, None
+
+    # Try to find an exact or close title match from the links
+    title_lower = title.lower().strip()
+    # URL slugs use hyphens, strip punctuation for comparison
+    title_slug = re.sub(r"[^a-z0-9]+", "-", title_lower).strip("-")
+
+    best_link = None
+    for link in links:
+        # Extract slug from URL
+        slug_match = re.search(r"/([^/]+)/$", link)
+        if not slug_match:
+            continue
+        slug = slug_match.group(1)
+        # Remove trailing numbers that kijkwijzer adds for duplicates (e.g. "film-1")
+        slug_base = re.sub(r"-\d+$", "", slug)
+        if slug == title_slug or slug_base == title_slug:
+            best_link = link
+            break
+        # Also check if the slug starts with the title slug (handles subtitles)
+        if slug.startswith(title_slug) or title_slug.startswith(slug_base):
+            best_link = link
+            break
+
+    if not best_link:
+        log.debug("Kijkwijzer: no title match for '%s' (slug: %s)", title, title_slug)
+        return None, None
+
+    time.sleep(rate_limit)
+
+    # Fetch detail page
+    try:
+        detail_resp = requests.get(best_link, timeout=10)
+        if detail_resp.status_code != 200:
+            return None, None
+    except requests.RequestException:
+        return None, None
+
+    detail_text = detail_resp.text
+
+    # Parse rating from detail page
+    # Pattern 1: "Alle leeftijden" -> AL
+    if re.search(r"Alle leeftijden", detail_text):
+        return "AL", "kijkwijzer"
+
+    # Pattern 2: "schadelijk tot X jaar" -> X
+    age_match = re.search(r"schadelijk tot (\d+) jaar", detail_text)
+    if age_match:
+        age = age_match.group(1)
+        if age in ("6", "9", "12", "14", "16", "18"):
+            return age, "kijkwijzer"
+
+    log.debug("Kijkwijzer: could not parse rating from %s", best_link)
+    return None, None
 
 
 def lookup_tmdb(tmdb_id, api_key, target_country, inference_countries, mappings):
@@ -113,39 +271,47 @@ def lookup_omdb(imdb_id, api_key, mappings):
     return None, None
 
 
-def update_movie_rating(conn, movie_id, rating_value, dry_run=True):
-    """Write rating to movie.c12. Returns True if updated."""
-    if dry_run:
-        return True
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE movie SET c12 = %s WHERE idMovie = %s",
-        (rating_value, movie_id),
-    )
-    conn.commit()
-    return cursor.rowcount > 0
-
-
 def backfill(config):
     """Main backfill logic."""
-    db_cfg = config["db"]
+    kodi_cfg = config["kodi"]
     tmdb_key = config["tmdb"]["api_key"]
     omdb_key = config["omdb"]["api_key"]
     rating_cfg = config["rating"]
     opts = config.get("options", {})
 
+    kodi_url = kodi_cfg["url"]
+    auth = None
+    if kodi_cfg.get("username"):
+        auth = (kodi_cfg["username"], kodi_cfg.get("password", ""))
+
     prefix = rating_cfg.get("prefix", "")
     target = rating_cfg["target_country"]
     inference = rating_cfg.get("inference_countries", [])
     mappings = rating_cfg.get("mappings", {})
+    fallback_rating = rating_cfg.get("fallback_rating", "NR")
     dry_run = opts.get("dry_run", True)
     rate_limit = opts.get("rate_limit", 0.25)
+    use_kijkwijzer = opts.get("kijkwijzer", True)
+    retry_days = opts.get("retry_days", 30)
 
-    conn = mysql.connector.connect(**db_cfg)
-    movies = get_movies_missing_rating(conn)
+    # Load manual overrides
+    overrides_path = opts.get("overrides_file", "overrides.yaml")
+    overrides = load_overrides(overrides_path)
+    if overrides:
+        log.info("Loaded %d manual overrides from %s", len(overrides), overrides_path)
+
+    # Load unresolved tracker
+    unresolved_path = opts.get("unresolved_file", "unresolved.json")
+    unresolved = load_unresolved(unresolved_path)
+
+    movies = get_movies_missing_rating(kodi_url, auth)
     log.info("Found %d movies missing ratings (dry_run=%s)", len(movies), dry_run)
 
-    stats = {"tmdb_direct": 0, "tmdb_inferred": 0, "omdb": 0, "not_found": 0, "error": 0}
+    stats = {
+        "tmdb_direct": 0, "tmdb_inferred": 0, "omdb": 0,
+        "kijkwijzer": 0, "override": 0, "fallback": 0,
+        "pending": 0, "error": 0,
+    }
 
     for movie in movies:
         mid = movie["idMovie"]
@@ -155,9 +321,14 @@ def backfill(config):
 
         rating, source = None, None
 
+        # Tier 0: Manual overrides
+        if title in overrides:
+            rating = overrides[title]
+            source = "override"
+
         try:
             # Tier 1+2: TMDB direct + inference
-            if tmdb_id and tmdb_key:
+            if not rating and tmdb_id and tmdb_key:
                 rating, source = lookup_tmdb(
                     tmdb_id, tmdb_key, target, inference, mappings
                 )
@@ -168,35 +339,75 @@ def backfill(config):
                 rating, source = lookup_omdb(imdb_id, omdb_key, mappings)
                 time.sleep(rate_limit)
 
+            # Tier 4: Kijkwijzer.nl scraping
+            if not rating and use_kijkwijzer:
+                rating, source = lookup_kijkwijzer(title, rate_limit)
+                time.sleep(rate_limit)
+
         except requests.RequestException as e:
             log.error("API error for '%s': %s", title, e)
             stats["error"] += 1
             continue
 
         if rating:
+            # Resolved — remove from unresolved tracker if present
+            unresolved.pop(title, None)
             full_rating = f"{prefix}{rating}"
             action = "DRY-RUN" if dry_run else "UPDATE"
             log.info("[%s] %-45s -> %s (source: %s)", action, title, full_rating, source)
-            update_movie_rating(conn, mid, full_rating, dry_run)
-            if source and "inferred" in source:
+            update_movie_rating(kodi_url, mid, full_rating, dry_run, auth)
+            if source == "override":
+                stats["override"] += 1
+            elif source == "kijkwijzer":
+                stats["kijkwijzer"] += 1
+            elif source and "inferred" in source:
                 stats["tmdb_inferred"] += 1
             elif source and source.startswith("tmdb"):
                 stats["tmdb_direct"] += 1
             else:
                 stats["omdb"] += 1
+        elif fallback_rating and should_apply_fallback(title, unresolved, retry_days):
+            # Retry window expired — apply fallback
+            full_rating = f"{prefix}{fallback_rating}"
+            action = "DRY-RUN" if dry_run else "UPDATE"
+            log.info("[%s] %-45s -> %s (source: fallback, retry expired)", action, title, full_rating)
+            update_movie_rating(kodi_url, mid, full_rating, dry_run, auth)
+            unresolved.pop(title, None)
+            stats["fallback"] += 1
         else:
-            log.info("[SKIP]    %-45s -> no rating found", title)
-            stats["not_found"] += 1
+            # Still in retry window or no fallback configured
+            first_seen = unresolved.get(title, {}).get("first_seen", "today")
+            log.info("[PENDING] %-45s -> waiting for rating (since %s)", title, first_seen)
+            stats["pending"] += 1
 
-    conn.close()
+    # Save unresolved tracker
+    save_unresolved(unresolved_path, unresolved, dry_run)
+    if unresolved:
+        log.info("Tracking %d unresolved movies in %s", len(unresolved), unresolved_path)
 
     log.info("--- Summary ---")
+    log.info("Overrides:     %d", stats["override"])
     log.info("TMDB direct:   %d", stats["tmdb_direct"])
     log.info("TMDB inferred: %d", stats["tmdb_inferred"])
     log.info("OMDB:          %d", stats["omdb"])
-    log.info("Not found:     %d", stats["not_found"])
+    log.info("Kijkwijzer:    %d", stats["kijkwijzer"])
+    log.info("Fallback:      %d", stats["fallback"])
+    log.info("Pending:       %d", stats["pending"])
     log.info("Errors:        %d", stats["error"])
     return stats
+
+
+def setup_logging(verbose=False, log_file=None):
+    """Configure console and optional file logging."""
+    fmt = "%(asctime)s %(levelname)-5s %(message)s"
+    datefmt = "%H:%M:%S"
+    level = logging.DEBUG if verbose else logging.INFO
+
+    handlers = [logging.StreamHandler()]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+
+    logging.basicConfig(level=level, format=fmt, datefmt=datefmt, handlers=handlers)
 
 
 def main():
@@ -206,21 +417,24 @@ def main():
     )
     parser.add_argument(
         "--dry-run", action="store_true", default=None,
-        help="Override config: log changes without writing to DB"
+        help="Override config: log changes without writing to Kodi"
     )
     parser.add_argument(
         "--no-dry-run", action="store_true", default=None,
-        help="Override config: actually write changes to DB"
+        help="Override config: actually write changes to Kodi"
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Debug logging"
     )
+    parser.add_argument(
+        "-l", "--log-file", default=None,
+        help="Write log output to file (in addition to console)"
+    )
     args = parser.parse_args()
 
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-
     config = load_config(args.config)
+    log_file = args.log_file or config.get("options", {}).get("log_file")
+    setup_logging(verbose=args.verbose, log_file=log_file)
 
     if args.dry_run:
         config.setdefault("options", {})["dry_run"] = True

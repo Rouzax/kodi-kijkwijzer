@@ -1,28 +1,30 @@
-db:
-  host: localhost
-  port: 3306
-  user: kodi
-  password: ""
-  database: MyVideos131
+# Kodi JSON-RPC connection
+kodi:
+  url: "http://localhost:8080/jsonrpc"
+  # username: ""   # uncomment if Kodi requires authentication
+  # password: ""
 
+# API keys
 tmdb:
   api_key: ""
 
 omdb:
   api_key: ""
 
+# Rating configuration
 rating:
   prefix: "Rated "
   target_country: "NL"
+  fallback_rating: "NR"     # rating for movies no source can resolve (empty string to skip)
   inference_countries:
-    - BE
-    - DE
-    - AT
-    - FR
-    - GB
-    - DK
-    - SE
-    - US
+    - BE    # Belgium — same Kijkwijzer system
+    - DE    # Germany — FSK, very similar
+    - AT    # Austria — similar to DE
+    - FR    # France — geographically close
+    - GB    # UK — BBFC, decent middle ground
+    - DK    # Denmark — Nordic neighbor
+    - SE    # Sweden — Nordic, similar values
+    - US    # Last resort — different philosophy
   mappings:
     BE:
       "AL": "AL"
@@ -79,3 +81,8 @@ rating:
 options:
   dry_run: true
   rate_limit: 0.25
+  retry_days: 30             # days to retry before applying fallback rating
+  kijkwijzer: true           # scrape kijkwijzer.nl as fallback
+  overrides_file: "overrides.yaml"    # manual rating overrides
+  unresolved_file: "unresolved.json"  # tracks movies waiting for ratings
+  # log_file: "backfill.log"        # optional: also write log to file
