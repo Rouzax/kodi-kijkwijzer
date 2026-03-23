@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/kijkwijzer-logo.svg" alt="Kijkwijzer" width="200">
+  <img src="assets/kijkwijzer-logo.svg" alt="Kijkwijzer" width="400">
 </p>
 
 # Kodi Kijkwijzer
